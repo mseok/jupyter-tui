@@ -12,7 +12,7 @@ pub struct Notebook {
 pub struct Cell {
     pub cell_type: String,
     pub source: Vec<String>,
-    pub outputs: Option<Vec<Output>>,
+    pub output: Option<Output>,
     // 필요한 필드 추가
 }
 
