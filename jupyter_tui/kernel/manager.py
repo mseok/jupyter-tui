@@ -156,7 +156,7 @@ class KernelManager:
         """List available kernel specifications."""
         return self.kernel_spec_manager.get_all_specs()
         
-    async def create_kernel(self, kernel_name: str = 'python3') -> str:
+    async def create_kernel(self, kernel_name: str = 'jupyter-tui-kernel') -> str:
         """Create a new kernel connection."""
         kernel_id = str(uuid.uuid4())
         manager = AsyncKernelManager(kernel_name=kernel_name)

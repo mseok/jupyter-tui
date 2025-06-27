@@ -178,7 +178,7 @@ class Notebook:
         if self.current_cell_index > 0:
             self.current_cell_index -= 1
             
-    def to_nbformat(self) -> nbformat.NotebookNode:
+    def to_nbformat(self) -> Dict[str, Any]:
         """Convert to nbformat notebook."""
         nb = new_notebook()
         nb.metadata = self.metadata
@@ -186,7 +186,7 @@ class Notebook:
         return nb
         
     @classmethod
-    def from_nbformat(cls, nb: nbformat.NotebookNode) -> 'Notebook':
+    def from_nbformat(cls, nb: Union[Dict[str, Any], Any]) -> 'Notebook':
         """Create notebook from nbformat."""
         notebook = cls(
             metadata=dict(nb.metadata),
