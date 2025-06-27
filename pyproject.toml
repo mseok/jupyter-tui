@@ -1,0 +1,17 @@
+[project]
+name = "jupyter-tui"
+version = "0.1.0"
+description = "A terminal user interface for Jupyter notebooks"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "textual>=0.47.0",
+    "jupyter-client>=8.6.0",
+    "nbformat>=5.9.0",
+    "rich>=13.7.0",
+    "pyzmq>=25.1.0",
+    "pygments>=2.17.0",
+    "prompt-toolkit>=3.0.43",
+    "aiofiles>=23.2.1",
+    "python-dateutil>=2.8.2",
+]
