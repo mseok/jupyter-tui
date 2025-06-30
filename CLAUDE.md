@@ -65,3 +65,5 @@ jupyter_tui/
 - Cell execution follows Jupyter's message protocol with proper parent tracking
 - Outputs are streamed and rendered incrementally
 - The UI is fully keyboard-driven with vim-style bindings
+- Each time successfully created features, add all changed files and commit it with suitable message
+- Since the program is streaming service, if you do not get any errors in 1 minute, automatically shutdown the app only when you do some debugging

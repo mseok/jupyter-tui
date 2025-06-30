@@ -78,10 +78,18 @@ class Cell:
         """Clear cell outputs."""
         self.outputs.clear()
         self.state = CellState.IDLE
+        # Mark notebook as modified if attached
+        if hasattr(self, '_notebook') and self._notebook:
+            self._notebook._temp_changes = True
+            self._notebook.modified = True
         
     def add_output(self, output: CellOutput):
         """Add output to cell."""
         self.outputs.append(output)
+        # Mark notebook as modified if attached
+        if hasattr(self, '_notebook') and self._notebook:
+            self._notebook._temp_changes = True
+            self._notebook.modified = True
         
     def to_nbformat(self) -> Dict[str, Any]:
         """Convert to nbformat cell dict."""
@@ -138,29 +146,38 @@ class Notebook:
     current_cell_index: int = 0
     filepath: Optional[str] = None
     modified: bool = False
+    # Temporary state management
+    _original_state: Optional[Dict[str, Any]] = field(default=None, init=False)
+    _temp_changes: bool = field(default=False, init=False)
     
     def add_cell(self, cell: Cell, index: Optional[int] = None):
         """Add a cell to the notebook."""
+        self._backup_original_state()
         if index is None:
             self.cells.append(cell)
         else:
             self.cells.insert(index, cell)
         self.modified = True
+        self._temp_changes = True
         
     def remove_cell(self, index: int):
         """Remove a cell from the notebook."""
         if 0 <= index < len(self.cells):
+            self._backup_original_state()
             self.cells.pop(index)
             if self.current_cell_index >= len(self.cells) and self.current_cell_index > 0:
                 self.current_cell_index = len(self.cells) - 1
             self.modified = True
+            self._temp_changes = True
             
     def move_cell(self, from_index: int, to_index: int):
         """Move a cell to a new position."""
         if 0 <= from_index < len(self.cells) and 0 <= to_index < len(self.cells):
+            self._backup_original_state()
             cell = self.cells.pop(from_index)
             self.cells.insert(to_index, cell)
             self.modified = True
+            self._temp_changes = True
             
     def get_current_cell(self) -> Optional[Cell]:
         """Get the current cell."""
@@ -196,6 +213,7 @@ class Notebook:
         
         for cell_dict in nb.cells:
             cell = Cell.from_nbformat(dict(cell_dict))
+            cell._notebook = notebook  # Link cell to notebook
             notebook.cells.append(cell)
             
         return notebook
@@ -211,6 +229,9 @@ class Notebook:
         with open(self.filepath, 'w', encoding='utf-8') as f:
             nbformat.write(nb, f)
         self.modified = False
+        # Clear temporary state after successful save
+        self._original_state = None
+        self._temp_changes = False
         
     @classmethod
     def load(cls, filepath: str) -> 'Notebook':
@@ -219,4 +240,38 @@ class Notebook:
             nb = nbformat.read(f, as_version=4)
         notebook = cls.from_nbformat(nb)
         notebook.filepath = filepath
+        # Link existing cells to notebook for change tracking
+        for cell in notebook.cells:
+            cell._notebook = notebook
         return notebook
+        
+    def _backup_original_state(self):
+        """Backup the original state if not already backed up."""
+        if self._original_state is None:
+            self._original_state = {
+                'cells': [cell.to_nbformat() for cell in self.cells],
+                'metadata': dict(self.metadata),
+                'current_cell_index': self.current_cell_index,
+            }
+            
+    def discard_changes(self):
+        """Discard all temporary changes and restore original state."""
+        if self._original_state is not None:
+            # Restore cells
+            self.cells = [Cell.from_nbformat(cell_dict) for cell_dict in self._original_state['cells']]
+            self.metadata = dict(self._original_state['metadata'])
+            self.current_cell_index = self._original_state['current_cell_index']
+            
+            # Clear temporary state
+            self._original_state = None
+            self._temp_changes = False
+            self.modified = False
+            
+    def has_unsaved_changes(self) -> bool:
+        """Check if there are unsaved temporary changes."""
+        return self._temp_changes
+        
+    def apply_changes(self):
+        """Apply temporary changes permanently (used when explicitly saving)."""
+        self._original_state = None
+        self._temp_changes = False

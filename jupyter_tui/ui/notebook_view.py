@@ -12,6 +12,8 @@ from textual import events
 from ..notebook.models import Notebook, Cell, CellType, CellState, CellOutput
 from ..kernel.manager import KernelManager
 from .cell_widget import CellWidget, CellSelected
+from .help_dialog import HelpDialog
+from .kernel_dialog import KernelSelectionDialog
 
 
 class NotebookView(Container):
@@ -34,6 +36,8 @@ class NotebookView(Container):
         Binding("shift+g", "go_bottom", "Go to Bottom", key_display="G"),
         Binding("enter", "edit_cell", "Edit Cell", key_display="Enter"),
         Binding("escape", "command_mode", "Command Mode", key_display="Esc"),
+        Binding("question_mark", "show_help", "Show Help", key_display="?"),
+        Binding("ctrl+k", "select_kernel", "Select Kernel", key_display="^K"),
     ]
     
     def __init__(self, notebook: Notebook, kernel_manager: KernelManager):
@@ -43,6 +47,7 @@ class NotebookView(Container):
         self.cell_widgets: List[CellWidget] = []
         self.selected_index = 0
         self.mode = "command"  # command or insert
+        self.status_bar = None  # Will be set by parent app
         
     def compose(self) -> ComposeResult:
         """Compose the notebook view."""
@@ -164,6 +169,7 @@ class NotebookView(Container):
             self.selected_index += 1
             self.cell_widgets[self.selected_index].selected = True
             self.cell_widgets[self.selected_index].scroll_visible()
+            self._update_status_bar()
             
     def action_previous_cell(self) -> None:
         """Move to previous cell."""
@@ -172,6 +178,7 @@ class NotebookView(Container):
             self.selected_index -= 1
             self.cell_widgets[self.selected_index].selected = True
             self.cell_widgets[self.selected_index].scroll_visible()
+            self._update_status_bar()
             
     def action_go_top(self) -> None:
         """Go to first cell."""
@@ -180,6 +187,7 @@ class NotebookView(Container):
             self.selected_index = 0
             self.cell_widgets[0].selected = True
             self.cell_widgets[0].scroll_visible()
+            self._update_status_bar()
             
     def action_go_bottom(self) -> None:
         """Go to last cell."""
@@ -188,18 +196,25 @@ class NotebookView(Container):
             self.selected_index = len(self.cell_widgets) - 1
             self.cell_widgets[self.selected_index].selected = True
             self.cell_widgets[self.selected_index].scroll_visible()
+            self._update_status_bar()
             
     def action_edit_cell(self) -> None:
         """Enter edit mode for current cell."""
         if self.selected_index < len(self.cell_widgets):
             self.cell_widgets[self.selected_index].enter_edit_mode()
             self.mode = "insert"
+            self._update_status_bar()
+            # Refresh footer to show insert mode shortcuts
+            self.app.refresh()
             
     def action_command_mode(self) -> None:
         """Enter command mode."""
         if self.selected_index < len(self.cell_widgets):
             self.cell_widgets[self.selected_index].exit_edit_mode()
             self.mode = "command"
+            self._update_status_bar()
+            # Refresh footer to show command mode shortcuts
+            self.app.refresh()
             
     def action_insert_above(self) -> None:
         """Insert a new cell above current cell."""
@@ -328,3 +343,70 @@ class NotebookView(Container):
             
         if self.cell_widgets and self.selected_index < len(self.cell_widgets):
             self.cell_widgets[self.selected_index].selected = True
+            
+    def action_show_help(self) -> None:
+        """Show help dialog with current mode context."""
+        help_dialog = HelpDialog(mode=self.mode)
+        self.app.push_screen(help_dialog)
+        
+    async def action_select_kernel(self) -> None:
+        """Show kernel selection dialog."""
+        available_kernels = self.kernel_manager.list_kernel_specs()
+        current_kernel = None
+        
+        # Get current kernel name if available
+        kernel = self.kernel_manager.get_kernel()
+        if kernel and hasattr(kernel, 'kernel_manager'):
+            current_kernel = getattr(kernel.kernel_manager, 'kernel_name', None)
+            
+        dialog = KernelSelectionDialog(available_kernels, current_kernel)
+        selected_kernel = await self.app.push_screen_wait(dialog)
+        
+        if selected_kernel and selected_kernel != current_kernel:
+            # Switch to new kernel
+            await self._switch_kernel(selected_kernel)
+            
+    async def _switch_kernel(self, kernel_name: str):
+        """Switch to a new kernel."""
+        try:
+            # Shutdown current kernel
+            await self.kernel_manager.shutdown_all()
+            
+            # Create new kernel
+            await self.kernel_manager.create_kernel(kernel_name)
+            
+            # Update status
+            if self.status_bar:
+                self.status_bar.update_kernel_status("idle")
+                
+            # Clear all cell execution states
+            for cell in self.notebook.cells:
+                if cell.cell_type == CellType.CODE:
+                    cell.state = CellState.IDLE
+                    cell.execution_count = None
+                    
+            self._refresh_cells()
+            self.notify(f"Switched to kernel: {kernel_name}", severity="information")
+            
+        except Exception as e:
+            self.notify(f"Failed to switch kernel: {e}", severity="error")
+            
+    def _update_status_bar(self):
+        """Update the status bar with current information."""
+        if self.status_bar:
+            # Use notebook cells count if cell_widgets not ready yet
+            total_cells = len(self.cell_widgets) if self.cell_widgets else len(self.notebook.cells)
+            self.status_bar.update_cell_position(self.selected_index, total_cells)
+            self.status_bar.update_mode(self.mode)
+            
+    @property
+    def current_cell_widget(self) -> Optional[CellWidget]:
+        """Get the currently selected cell widget."""
+        if 0 <= self.selected_index < len(self.cell_widgets):
+            return self.cell_widgets[self.selected_index]
+        return None
+            
+    def set_status_bar(self, status_bar):
+        """Set the status bar reference."""
+        self.status_bar = status_bar
+        self._update_status_bar()

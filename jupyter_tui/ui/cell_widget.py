@@ -23,24 +23,28 @@ class CellIndicator(Static):
         self.cell = cell
         
     def render(self) -> RenderableType:
-        if self.cell.cell_type != CellType.CODE:
-            return " " * 7
-            
+        # Show cell type indicator for all cells
+        if self.cell.cell_type == CellType.MARKDOWN:
+            return Text("   M:   ", style="yellow")
+        elif self.cell.cell_type == CellType.RAW:
+            return Text("   R:   ", style="white")
+        
+        # Code cell execution indicators
         if self.cell.state == CellState.IDLE:
             count = self.cell.execution_count
             if count is None:
-                return "[ ]:   "
+                return Text("[ ]:    ", style="cyan")
             else:
-                return f"[{count}]:  "
+                return Text(f"[{count}]:   ", style="cyan")
         elif self.cell.state == CellState.PENDING:
-            return "[...]: "
+            return Text("[...]:  ", style="orange")
         elif self.cell.state == CellState.RUNNING:
-            return "[*]:   "
+            return Text("[*]:    ", style="orange bold")
         elif self.cell.state == CellState.ERROR:
-            return "[!]:   "
+            return Text("[!]:    ", style="red bold")
         else:
             count = self.cell.execution_count or " "
-            return f"[{count}]:  "
+            return Text(f"[{count}]:   ", style="green")
 
 
 class CellEditor(TextArea):
@@ -56,52 +60,123 @@ class CellEditor(TextArea):
         )
         self.cell = cell
         
+    def on_mount(self) -> None:
+        """Set up cursor tracking when mounted."""
+        super().on_mount()
+        # Set cursor style for insert mode
+        self.cursor_type = "bar"
+        self.cursor_blink = True
+        # Force focus to ensure cursor is visible
+        self.focus()
+        
     def on_blur(self) -> None:
         """Save content when editor loses focus."""
-        self.cell.source = self.text
+        if self.cell.source != self.text:
+            self.cell.source = self.text
+            # Mark notebook as having temporary changes
+            if hasattr(self.cell, '_notebook') and self.cell._notebook:
+                self.cell._notebook._backup_original_state()
+                self.cell._notebook._temp_changes = True
+                self.cell._notebook.modified = True
+        
+    def watch_cursor_position(self, cursor_position) -> None:
+        """Track cursor position changes."""
+        # Update status bar with cursor position
+        if hasattr(self.app, 'notebook_view') and self.app.notebook_view and self.app.notebook_view.status_bar:
+            line = cursor_position[0] + 1  # 1-based indexing
+            column = cursor_position[1] + 1
+            self.app.notebook_view.status_bar.update_cursor_position(line, column)
+            
+    def on_key(self, event) -> None:
+        """Handle key events and update content in real-time."""
+        super().on_key(event)
+        # Update cell content immediately and track changes
+        if self.cell.source != self.text:
+            self.cell.source = self.text
+            # Mark notebook as having temporary changes
+            if hasattr(self.cell, '_notebook') and self.cell._notebook:
+                self.cell._notebook._backup_original_state()
+                self.cell._notebook._temp_changes = True
+                self.cell._notebook.modified = True
+        # Force refresh to show changes
+        self.refresh()
 
 
-class OutputDisplay(Static):
+class OutputDisplay(Container):
     """Widget for displaying cell outputs."""
     
     def __init__(self, outputs: List[CellOutput]):
-        super().__init__()
+        super().__init__(classes="cell-output-container")
         self.outputs = outputs
         self.renderer_registry = create_default_registry()
+        self.collapsed = False
         
-    def render(self) -> RenderableType:
+    def compose(self) -> ComposeResult:
+        """Compose the output display."""
         if not self.outputs:
-            return ""
+            return
             
-        rendered_outputs = []
+        # Output header with collapse toggle
+        output_count = len(self.outputs)
+        header_text = f"Output ({output_count} items)" if output_count > 1 else "Output"
+        yield Static(Text(f"▼ {header_text}", style="bold cyan"), classes="output-header")
         
-        for output in self.outputs:
-            if output.output_type == 'stream':
-                rendered_outputs.append(Text(output.text or '', style="dim"))
-            elif output.output_type == 'error':
-                renderer = self.renderer_registry.get_renderer('error')
-                rendered_outputs.append(renderer.render({
-                    'ename': output.ename,
-                    'evalue': output.evalue,
-                    'traceback': output.traceback
-                }))
-            elif output.output_type in ['display_data', 'execute_result']:
-                # Try different MIME types in order of preference
-                mime_priority = [
-                    'text/html', 'text/markdown', 'text/latex',
-                    'application/json', 'text/plain'
-                ]
-                
-                for mime_type in mime_priority:
-                    if mime_type in output.data:
-                        renderer = self.renderer_registry.get_renderer(mime_type)
-                        if renderer:
-                            rendered_outputs.append(
-                                renderer.render(output.data[mime_type], output.metadata)
-                            )
-                            break
-                            
-        return Vertical(*rendered_outputs)
+        # Render outputs
+        if not self.collapsed:
+            with Vertical(classes="output-content"):
+                for i, output in enumerate(self.outputs):
+                    if output.output_type == 'stream':
+                        stream_name = output.name or 'stdout'
+                        style = "green" if stream_name == 'stdout' else "red"
+                        yield Static(
+                            Panel(
+                                Text(output.text or '', style=style),
+                                title=f"[{stream_name}]",
+                                border_style=style
+                            ),
+                            classes="output-item"
+                        )
+                    elif output.output_type == 'error':
+                        renderer = self.renderer_registry.get_renderer('error')
+                        yield Static(
+                            renderer.render({
+                                'ename': output.ename,
+                                'evalue': output.evalue,
+                                'traceback': output.traceback
+                            }),
+                            classes="output-item"
+                        )
+                    elif output.output_type in ['display_data', 'execute_result']:
+                        # Try different MIME types in order of preference
+                        mime_priority = [
+                            'text/html', 'text/markdown', 'text/latex',
+                            'application/json', 'text/plain'
+                        ]
+                        
+                        for mime_type in mime_priority:
+                            if mime_type in output.data:
+                                renderer = self.renderer_registry.get_renderer(mime_type)
+                                if renderer:
+                                    result_style = "blue" if output.output_type == 'execute_result' else "cyan"
+                                    yield Static(
+                                        Panel(
+                                            renderer.render(output.data[mime_type], output.metadata),
+                                            title=f"[{output.output_type}]",
+                                            border_style=result_style
+                                        ),
+                                        classes="output-item"
+                                    )
+                                    break
+    
+    def toggle_collapsed(self):
+        """Toggle output collapse state."""
+        self.collapsed = not self.collapsed
+        self.refresh()
+        
+    def update_outputs(self, outputs: List[CellOutput]):
+        """Update the outputs and refresh display."""
+        self.outputs = outputs
+        self.refresh()
 
 
 class CellWidget(Container):
@@ -123,6 +198,14 @@ class CellWidget(Container):
         self.editor: Optional[CellEditor] = None
         self.output_display: Optional[OutputDisplay] = None
         
+        # Set cell type CSS class
+        if cell.cell_type == CellType.CODE:
+            self.add_class("code-cell")
+        elif cell.cell_type == CellType.MARKDOWN:
+            self.add_class("markdown-cell")
+        elif cell.cell_type == CellType.RAW:
+            self.add_class("raw-cell")
+        
     def compose(self) -> ComposeResult:
         """Compose the cell widget."""
         with Horizontal(classes="cell-container"):
@@ -132,6 +215,8 @@ class CellWidget(Container):
                 if self.editing:
                     self.editor = CellEditor(self.cell, classes="cell-editor")
                     yield self.editor
+                    # Schedule focus after compose
+                    self.set_timer(0.1, self._focus_editor)
                 else:
                     # Display cell source as syntax-highlighted static content
                     if self.cell.cell_type == CellType.CODE:
@@ -144,9 +229,15 @@ class CellWidget(Container):
                             ),
                             classes="cell-source"
                         )
-                    else:
+                    elif self.cell.cell_type == CellType.MARKDOWN:
+                        from rich.markdown import Markdown
                         yield Static(
-                            Text(self.cell.source or " ", style="italic"),
+                            Markdown(self.cell.source or " "),
+                            classes="cell-source"
+                        )
+                    else:  # RAW cell
+                        yield Static(
+                            Text(self.cell.source or " ", style="dim white"),
                             classes="cell-source"
                         )
                         
@@ -159,6 +250,9 @@ class CellWidget(Container):
         """React to selection changes."""
         if selected:
             self.add_class("selected")
+            # Clear cursor position when cell is not being edited
+            if not self.editing and hasattr(self.app, 'notebook_view') and self.app.notebook_view and self.app.notebook_view.status_bar:
+                self.app.notebook_view.status_bar.update_cursor_position(0, 0)
         else:
             self.remove_class("selected")
             if self.editing:
@@ -168,27 +262,44 @@ class CellWidget(Container):
         """React to editing mode changes."""
         if editing:
             self.add_class("editing")
+            # Force recompose to show editor
+            self.refresh(layout=True)
         else:
             self.remove_class("editing")
-        self.refresh()
+            # Clear cursor position when exiting edit mode
+            if hasattr(self.app, 'notebook_view') and self.app.notebook_view and self.app.notebook_view.status_bar:
+                self.app.notebook_view.status_bar.update_cursor_position(0, 0)
+            # Force recompose to show static content
+            self.refresh(layout=True)
         
     def enter_edit_mode(self) -> None:
         """Enter edit mode."""
         if not self.editing:
             self.editing = True
-            if self.editor:
-                self.editor.focus()
+                
+    def _focus_editor(self) -> None:
+        """Focus the editor after recompose."""
+        if self.editor:
+            self.editor.focus()
+            # Set cursor style for insert mode
+            self.editor.cursor_type = "bar"
+            self.editor.cursor_blink = True
+            # Force refresh to apply cursor changes
+            self.editor.refresh()
                 
     def exit_edit_mode(self) -> None:
         """Exit edit mode."""
         if self.editing:
             self.editing = False
+            # Set cursor style for command mode
+            if self.editor:
+                self.editor.cursor_type = "block"
+                self.editor.cursor_blink = False
             
     def update_output(self) -> None:
         """Update the output display."""
         if self.output_display:
-            self.output_display.outputs = self.cell.outputs
-            self.output_display.refresh()
+            self.output_display.update_outputs(self.cell.outputs)
         else:
             self.refresh()
             
